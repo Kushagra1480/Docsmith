@@ -22,7 +22,7 @@ type Message struct {
 
 type Hub struct {
 	clients    map[*Client]bool
-	broadcast  chan *Message
+	Broadcast  chan *Message
 	register   chan *Client
 	unregister chan *Client
 	mutex      sync.Mutex
@@ -39,7 +39,7 @@ var upgrader = websocket.Upgrader{
 func NewHub() *Hub {
 	return &Hub{
 		clients: make(map[*Client]bool),
-		broadcast: make(chan *Message),
+		Broadcast: make(chan *Message),
 		register: make(chan *Client),
 		unregister: make(chan *Client),
 	}
@@ -59,7 +59,7 @@ func (h *Hub) Run() {
 				close(client.send)	
 			}
 			h.mutex.Unlock()
-		case message := <-h.broadcast:
+		case message := <-h.Broadcast:
 			msgJSON, err := json.Marshal(message)
 			if err != nil {
 				log.Printf("Error marshalling message: %v", err)
@@ -101,7 +101,7 @@ func (c *Client) readPump() {
 			log.Printf("Error unmarshalling message: %v", err)
 			continue
 		}
-		c.hub.broadcast <- &msg
+		c.hub.Broadcast <- &msg
 	}
 }
 

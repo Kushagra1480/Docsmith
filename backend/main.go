@@ -1,6 +1,9 @@
 package main
 
 import (
+	"docsmith/api"
+	"docsmith/db"
+	"docsmith/git"
 	"fmt"
 	"log"
 	"os"

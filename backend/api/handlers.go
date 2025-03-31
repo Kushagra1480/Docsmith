@@ -128,7 +128,7 @@ func getDocumentsHandler(db *sql.DB) gin.HandlerFunc {
 		var documents []models.Document
 
 		for rows.Next() {
-			var doc = models.Document
+			var doc models.Document
 			if err := rows.Scan(&doc.ID, &doc.Title, &doc.UpdatedAt); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan documents"})
 				return
@@ -152,7 +152,7 @@ func getDocumentHandler(db *sql.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
 			return 
 		}
-		if doc.UserID != userID.(int) {
+		if doc.UserID != userID {
 			c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 			return
 		}
@@ -227,7 +227,7 @@ func updateDocumentHandler(db *sql.DB, gitRepoPath string, hub *ws.Hub) gin.Hand
 			c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
 			return
 		}
-		if existingDoc.UserID != userID.(int) {
+		if existingDoc.UserID != userID {
 			c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 			return
 		}
@@ -291,7 +291,7 @@ func deleteDocumentHandler(db *sql.DB, gitRepoPath string) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
 			return
 		}
-		if existingDoc.UserID != userID.(int) {
+		if existingDoc.UserID != userID {
 			c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 			return
 		}

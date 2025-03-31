@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"docsmith/ws"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
