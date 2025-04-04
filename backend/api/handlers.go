@@ -303,7 +303,7 @@ func deleteDocumentHandler(db *sql.DB, gitRepoPath string) gin.HandlerFunc {
 		var existingDoc models.Document
 
 
-		err = db.QueryRow("select user_id from docs where id = ?", docID).
+		err = db.QueryRow("select user_id, title from docs where id = ?", docID).
 			Scan(&existingDoc.UserID, &existingDoc.Title)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
