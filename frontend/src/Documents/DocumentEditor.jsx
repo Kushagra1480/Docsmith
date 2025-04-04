@@ -1,8 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { marked } from 'marked';
 import { Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
+import { debounce } from 'lodash';
 import Sidebar from '../Layout/Sidebar';
 import VersionHistory from './VersionHistory';
 import ShareDocument from './SharedDocument';
@@ -10,11 +12,9 @@ import { useDocuments } from '../context/DocumentContext';
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
-import { marked } from 'marked';
 
 const LivePreview = Extension.create({
   name: 'livePreview',
-
   addProseMirrorPlugins() {
     return [
       new Plugin({
@@ -29,6 +29,7 @@ const LivePreview = Extension.create({
 
             doc.descendants((node, pos) => {
               if (node.isText) {
+                // Handle bold
                 if (node.marks.some(mark => mark.type.name === 'bold')) {
                   const start = pos;
                   const end = pos + node.nodeSize;
@@ -37,24 +38,17 @@ const LivePreview = Extension.create({
                   if (match) {
                     const content = match[1];
                     decorations.push(
-                      Decoration.inline(start + 2, end - 2, {
-                        style: 'font-weight: bold;',
-                      }),
-                      Decoration.inline(start, start + 2, {
-                        style: 'opacity: 0.3;',
-                      }),
-                      Decoration.inline(end - 2, end, {
-                        style: 'opacity: 0.3;',
-                      })
+                      Decoration.inline(start + 2, end - 2, { style: 'font-weight: bold;' }),
+                      Decoration.inline(start, start + 2, { style: 'opacity: 0.3; transition: opacity 0.2s;' }),
+                      Decoration.inline(end - 2, end, { style: 'opacity: 0.3; transition: opacity 0.2s;' })
                     );
                   } else {
                     decorations.push(
-                      Decoration.inline(start, end, {
-                        style: 'font-weight: bold;',
-                      })
+                      Decoration.inline(start, end, { style: 'font-weight: bold;' })
                     );
                   }
                 }
+                // Handle italic
                 if (node.marks.some(mark => mark.type.name === 'italic')) {
                   const start = pos;
                   const end = pos + node.nodeSize;
@@ -63,24 +57,17 @@ const LivePreview = Extension.create({
                   if (match) {
                     const content = match[1];
                     decorations.push(
-                      Decoration.inline(start + 1, end - 1, {
-                        style: 'font-style: italic;',
-                      }),
-                      Decoration.inline(start, start + 1, {
-                        style: 'opacity: 0.3;',
-                      }),
-                      Decoration.inline(end - 1, end, {
-                        style: 'opacity: 0.3;',
-                      })
+                      Decoration.inline(start + 1, end - 1, { style: 'font-style: italic;' }),
+                      Decoration.inline(start, start + 1, { style: 'opacity: 0.3; transition: opacity 0.2s;' }),
+                      Decoration.inline(end - 1, end, { style: 'opacity: 0.3; transition: opacity 0.2s;' })
                     );
                   } else {
                     decorations.push(
-                      Decoration.inline(start, end, {
-                        style: 'font-style: italic;',
-                      })
+                      Decoration.inline(start, end, { style: 'font-style: italic;' })
                     );
                   }
                 }
+                // Handle strikethrough
                 if (node.marks.some(mark => mark.type.name === 'strike')) {
                   const start = pos;
                   const end = pos + node.nodeSize;
@@ -89,25 +76,18 @@ const LivePreview = Extension.create({
                   if (match) {
                     const content = match[1];
                     decorations.push(
-                      Decoration.inline(start + 1, end - 1, {
-                        style: 'text-decoration: line-through;',
-                      }),
-                      Decoration.inline(start, start + 1, {
-                        style: 'opacity: 0.3;',
-                      }),
-                      Decoration.inline(end - 1, end, {
-                        style: 'opacity: 0.3;',
-                      })
+                      Decoration.inline(start + 1, end - 1, { style: 'text-decoration: line-through;' }),
+                      Decoration.inline(start, start + 1, { style: 'opacity: 0.3; transition: opacity 0.2s;' }),
+                      Decoration.inline(end - 1, end, { style: 'opacity: 0.3; transition: opacity 0.2s;' })
                     );
                   } else {
                     decorations.push(
-                      Decoration.inline(start, end, {
-                        style: 'text-decoration: line-through;',
-                      })
+                      Decoration.inline(start, end, { style: 'text-decoration: line-through;' })
                     );
                   }
                 }
               }
+              // Handle headings
               if (node.type.name === 'heading') {
                 const start = pos;
                 const end = pos + node.nodeSize;
@@ -151,6 +131,7 @@ function DocumentEditor() {
     enableCollaboration,
     disableCollaboration,
     loading, 
+    error 
   } = useDocuments();
   
   const [title, setTitle] = useState('');
@@ -160,7 +141,7 @@ function DocumentEditor() {
   const [showShareDialog, setShowShareDialog] = useState(false);
   const [versionComment, setVersionComment] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const [viewMode, setViewMode] = useState(false);
+  const [viewMode, setViewMode] = useState(true);
   const editorRef = useRef(null);
   const editorInstanceRef = useRef(null);
 
@@ -189,8 +170,13 @@ function DocumentEditor() {
     }
   }, [currentDocument, showVersionHistory]);
 
+  // Setup TipTap editor
   useEffect(() => {
     if (!viewMode && editorRef.current && !editorInstanceRef.current) {
+      const debouncedSetContent = debounce((markdown) => {
+        setContent(markdown);
+      }, 300);
+
       const editor = new Editor({
         element: editorRef.current,
         extensions: [
@@ -201,7 +187,7 @@ function DocumentEditor() {
         content: content,
         onUpdate: ({ editor }) => {
           const markdown = editor.storage.markdown.getMarkdown();
-          setContent(markdown);
+          debouncedSetContent(markdown);
         },
         editorProps: {
           attributes: {
@@ -455,6 +441,11 @@ function DocumentEditor() {
           font-size: 14px;
         }
         .leading-relaxed {
+          line-height: 1.6;
+        }
+        .markdown-preview {
+          font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+          font-size: 14px;
           line-height: 1.6;
         }
       `}</style>
