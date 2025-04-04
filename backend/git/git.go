@@ -1,12 +1,14 @@
 package git
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing"
 )
 
 type Commit struct {
@@ -74,36 +76,55 @@ func DeleteDocument(docPath string) error {
 }
 
 func CommitChanges(repoPath string, message string) error {
-	r, err := git.PlainOpen(repoPath)
-	if err != nil {
-		return err
-	}
+    // Check if the repo path exists
+    if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+        return fmt.Errorf("repository path does not exist: %s", repoPath)
+    }
 
-	w, err := r.Worktree()
-	if err != nil {
-		return err
-	}
+    // Open the repository
+    r, err := git.PlainOpen(repoPath)
+    if err != nil {
+        return fmt.Errorf("failed to open git repository: %w", err)
+    }
 
-	status, err := w.Status()
-	if err != nil {
-		return err
-	}
+    // Get worktree
+    w, err := r.Worktree()
+    if err != nil {
+        return fmt.Errorf("failed to get worktree: %w", err)
+    }
 
-	for file := range status {
-		_, err = w.Add(file)
-		if err != nil {
-			return err
-		}
-	}
+    // Check status
+    status, err := w.Status()
+    if err != nil {
+        return fmt.Errorf("failed to get git status: %w", err)
+    }
 
-	_, err = w.Commit(message, &git.CommitOptions{
-		Author: &object.Signature{
-			Name: "DocSmith",
-			Email: "docsmith@example.com",
-			When: time.Now(),
-		},
-	})
-	return err
+    // If no changes, return early
+    if status.IsClean() {
+        return nil
+    }
+
+    // Add files
+    for file := range status {
+        _, err = w.Add(file)
+        if err != nil {
+            return fmt.Errorf("failed to add file %s: %w", file, err)
+        }
+    }
+
+    // Commit
+    _, err = w.Commit(message, &git.CommitOptions{
+        Author: &object.Signature{
+            Name:  "DocSmith",
+            Email: "docsmith@example.com",
+            When:  time.Now(),
+        },
+    })
+    if err != nil {
+        return fmt.Errorf("failed to commit: %w", err)
+    }
+
+    return nil
 }
 
 func GetDocumentHistory(repoPath string, docPath string) ([]Commit, error) {
@@ -135,4 +156,87 @@ func GetDocumentHistory(repoPath string, docPath string) ([]Commit, error) {
 	})
 
 	return commits, err
+}
+
+// Add these new functions to the git.go file
+
+func CommitChangesWithHash(repoPath string, message string) (string, error) {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("git plain open: %w", err)
+	}
+
+	w, err := r.Worktree()
+	if err != nil {
+		return "", fmt.Errorf("get worktree: %w", err)
+	}
+
+	status, err := w.Status()
+	if err != nil {
+		return "", fmt.Errorf("get status: %w", err)
+	}
+
+	if len(status) == 0 {
+		// No changes to commit
+		// Get HEAD hash
+		ref, err := r.Head()
+		if err != nil {
+			return "", fmt.Errorf("get head reference: %w", err)
+		}
+		return ref.Hash().String(), nil
+	}
+
+	for file := range status {
+		_, err = w.Add(file)
+		if err != nil {
+			return "", fmt.Errorf("adding file %s: %w", file, err)
+		}
+	}
+
+	hash, err := w.Commit(message, &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "DocSmith",
+			Email: "docsmith@example.com",
+			When:  time.Now(),
+		},
+	})
+	
+	if err != nil {
+		return "", fmt.Errorf("committing changes: %w", err)
+	}
+	
+	return hash.String(), nil
+}
+
+func GetDocumentContentAtVersion(repoPath string, docPath string, commitHash string) (string, error) {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("git plain open: %w", err)
+	}
+
+	// Get the commit
+	hash := plumbing.NewHash(commitHash)
+	commit, err := r.CommitObject(hash)
+	if err != nil {
+		return "", fmt.Errorf("get commit object: %w", err)
+	}
+
+	// Get the file from that commit
+	relativePath, err := filepath.Rel(repoPath, docPath)
+	if err != nil {
+		return "", fmt.Errorf("get relative path: %w", err)
+	}
+
+	file, err := commit.File(relativePath)
+	if err != nil {
+		return "", fmt.Errorf("get file at commit: %w", err)
+	}
+
+	// Get the content
+	content, err := file.Contents()
+	if err != nil {
+		return "", fmt.Errorf("get file contents: %w", err)
+	}
+
+	return content, nil
 }

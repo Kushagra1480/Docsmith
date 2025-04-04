@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -34,6 +35,12 @@ type CreateDocumentRequest struct {
 type UpdateDocumentRequest struct {
 	Title string `json:"title" binding:"required"`
 	Content string `json:"content"`
+}
+
+type CreateVersionRequest struct {
+	Title   string `json:"title" binding:"required"`
+	Content string `json:"content"`
+	Comment string `json:"comment"`
 }
 
 func registerHandler(db *sql.DB) gin.HandlerFunc {
@@ -144,15 +151,21 @@ func getDocumentHandler(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, _ := c.Get("userID")
 		docID := c.Param("id")
+		
 		var doc models.Document
 		
-		err := db.QueryRow("select id, user_d, title, content, updated_at from docs where id = ?", docID).
+		err := db.QueryRow("select id, user_id, title, content, updated_at from docs where id = ?", docID).
 			Scan(&doc.ID, &doc.UserID, &doc.Title, &doc.Content, &doc.UpdatedAt)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
 			return 
 		}
-		if doc.UserID != userID {
+		
+		// Convert both to strings for comparison
+		userIDStr := fmt.Sprintf("%v", userID)
+		docUserIDStr := fmt.Sprintf("%v", doc.UserID)
+		
+		if docUserIDStr != userIDStr {
 			c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 			return
 		}
@@ -203,6 +216,8 @@ func createDocumentHandler(db *sql.DB, gitRepoPath string) gin.HandlerFunc {
 
 func updateDocumentHandler(db *sql.DB, gitRepoPath string, hub *ws.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
+
+		
 		userID, _ := c.Get("userID")
 		docID := c.Param("id")
 
@@ -221,13 +236,15 @@ func updateDocumentHandler(db *sql.DB, gitRepoPath string, hub *ws.Hub) gin.Hand
 
 		var existingDoc models.Document
 
-		err = db.QueryRow("select user_d from docs where id = ?", docID).
+		err = db.QueryRow("select user_id from docs where id = ?", docID).
 			Scan(&existingDoc.UserID)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
 			return
 		}
-		if existingDoc.UserID != userID {
+		userIDStr := fmt.Sprintf("%v", userID)
+		docUserIDStr := fmt.Sprintf("%v", existingDoc.UserID)
+		if userIDStr != docUserIDStr {
 			c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 			return
 		}
@@ -249,17 +266,18 @@ func updateDocumentHandler(db *sql.DB, gitRepoPath string, hub *ws.Hub) gin.Hand
 			return
 		}
 
-		message := &ws.Message {
-			Type: "update",
-			Data: map[string]interface{}{
-				"id": docID,
-				"title": req.Title,
-				"content": req.Content,
-				"user_id": userID,
-			},
-		} 
-
-		hub.Broadcast <- message
+		if hub != nil {
+            message := &ws.Message{
+                Type: "update",
+                Data: map[string]interface{}{
+                    "id":       id,
+                    "title":    req.Title,
+                    "content":  req.Content,
+                    "user_id":  userID,
+                },
+            }
+            hub.Broadcast <- message
+        }
 
 		c.JSON(http.StatusCreated, gin.H{
 			"id": docID,
@@ -285,13 +303,18 @@ func deleteDocumentHandler(db *sql.DB, gitRepoPath string) gin.HandlerFunc {
 		var existingDoc models.Document
 
 
-		err = db.QueryRow("select user_d from docs where id = ?", docID).
+		err = db.QueryRow("select user_id from docs where id = ?", docID).
 			Scan(&existingDoc.UserID, &existingDoc.Title)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
 			return
 		}
-		if existingDoc.UserID != userID {
+
+		
+		userIDStr := fmt.Sprintf("%v", userID)
+		docUserIDStr := fmt.Sprintf("%v", existingDoc.UserID)
+
+		if userIDStr != docUserIDStr {
 			c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 			return
 		}
@@ -336,6 +359,375 @@ func getDocumentHistoryHandler(gitRepoPath string) gin.HandlerFunc {
 		c.JSON(http.StatusOK, history)
 	}
 }
+func createDocumentVersionHandler(db *sql.DB, gitRepoPath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("userID")
+		docID := c.Param("id")
+		
+		id, err := strconv.Atoi(docID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid document ID"})
+			return
+		}
+
+		var req CreateVersionRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		var existingDoc models.Document
+		err = db.QueryRow("SELECT user_id FROM docs WHERE id = ?", docID).
+			Scan(&existingDoc.UserID)
+		
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
+			return
+		}
+
+		userIDStr := fmt.Sprintf("%v", userID)
+		docUserIDStr := fmt.Sprintf("%v", existingDoc.UserID)
+
+		if userIDStr != docUserIDStr {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+			return
+		}
+
+		// Update the document in the database
+		now := time.Now()
+		_, err = db.Exec("UPDATE docs SET title = ?, content = ?, updated_at = ? WHERE id = ?",
+			req.Title, req.Content, now, docID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update document"})
+			return
+		}
+
+		// Save to git and commit with the provided comment
+		docPath := filepath.Join(gitRepoPath, fmt.Sprintf("%d.md", id))
+		if err := git.SaveDocument(docPath, req.Content); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save document to git"})
+			return
+		}
+
+		commitMessage := req.Comment
+		if commitMessage == "" {
+			commitMessage = fmt.Sprintf("Update document: %s", req.Title)
+		}
+
+		commitHash, err := git.CommitChangesWithHash(gitRepoPath, commitMessage)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit changes"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"id":         id,
+			"hash":       commitHash,
+			"user_id":    userID,
+			"title":      req.Title,
+			"content":    req.Content,
+			"message":    commitMessage,
+			"updated_at": now,
+		})
+	}
+}
+
+type ShareDocumentRequest struct {
+	CanEdit bool `json:"canEdit"`
+}
+
+type ShareDocumentResponse struct {
+	URL      string `json:"url"`
+	DocID    int    `json:"docId"`
+	ShareID  string `json:"shareId"`
+	CanEdit  bool   `json:"canEdit"`
+	ExpireAt time.Time `json:"expireAt"`
+}
+
+func generateShareID() string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	const length = 10
+	
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(b)
+}
+
+func getDocumentByShareHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		shareID := c.Param("shareId")
+		
+		var docID int
+		var canEdit bool
+		var expireAt time.Time
+		
+		err := db.QueryRow(
+			"SELECT doc_id, can_edit, expire_at FROM doc_shares WHERE share_id = ?", 
+			shareID).Scan(&docID, &canEdit, &expireAt)
+		
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Share link not found or expired"})
+			return
+		}
+		
+		// Check if share link is expired
+		if time.Now().After(expireAt) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Share link has expired"})
+			return
+		}
+		
+		// Get document data
+		var doc models.Document
+		err = db.QueryRow(
+			"SELECT id, title, content, updated_at FROM docs WHERE id = ?", 
+			docID).Scan(&doc.ID, &doc.Title, &doc.Content, &doc.UpdatedAt)
+		
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
+			return
+		}
+		
+		c.JSON(http.StatusOK, gin.H{
+			"document": doc,
+			"share_info": gin.H{
+				"can_edit": canEdit,
+				"expire_at": expireAt,
+			},
+		})
+	}
+}
+
+func getDocumentPermissionsHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("userID")
+		docID := c.Param("id")
+		
+		var ownerID int
+		err := db.QueryRow("SELECT user_id FROM docs WHERE id = ?", docID).Scan(&ownerID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
+			return
+		}
+		
+		// Check if user is owner
+		isOwner := (ownerID == userID)
+		
+		// Get list of shares
+		rows, err := db.Query(
+			"SELECT share_id, can_edit, created_by, expire_at FROM doc_shares WHERE doc_id = ?", 
+			docID)
+		
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch document permissions"})
+			return
+		}
+		defer rows.Close()
+		
+		var shares []gin.H
+		for rows.Next() {
+			var shareID string
+			var canEdit bool
+			var createdBy int
+			var expireAt time.Time
+			
+			if err := rows.Scan(&shareID, &canEdit, &createdBy, &expireAt); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to scan share data"})
+				return
+			}
+			
+			// Get creator username
+			var creatorName string
+			err := db.QueryRow("SELECT username FROM users WHERE id = ?", createdBy).Scan(&creatorName)
+			if err != nil {
+				creatorName = "Unknown user"
+			}
+			
+			shares = append(shares, gin.H{
+				"share_id": shareID,
+				"can_edit": canEdit,
+				"created_by": gin.H{
+					"id": createdBy,
+					"username": creatorName,
+				},
+				"expire_at": expireAt,
+			})
+		}
+		
+		// Get active collaborators
+		var collaborators []gin.H
+		// This would typically be populated from an active sessions table
+		// or from WebSocket connections, but we'll leave it empty for simplicity
+		
+		c.JSON(http.StatusOK, gin.H{
+			"is_owner": isOwner,
+			"owner_id": ownerID,
+			"shares": shares,
+			"collaborators": collaborators,
+		})
+	}
+}
 
 
+func getDocumentVersionsHandler(gitRepoPath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		docID := c.Param("id")
+		
+		id, err := strconv.Atoi(docID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid document ID"})
+			return
+		}
 
+		docPath := filepath.Join(gitRepoPath, fmt.Sprintf("%d.md", id))
+		history, err := git.GetDocumentHistory(gitRepoPath, docPath)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch document versions"})
+			return
+		}
+
+		c.JSON(http.StatusOK, history)
+	}
+}
+
+func restoreDocumentVersionHandler(db *sql.DB, gitRepoPath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("userID")
+		docID := c.Param("id")
+		versionHash := c.Param("versionId")
+		
+		id, err := strconv.Atoi(docID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid document ID"})
+			return
+		}
+
+		var existingDoc models.Document
+		err = db.QueryRow("SELECT user_id FROM docs WHERE id = ?", docID).
+			Scan(&existingDoc.UserID)
+		
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
+			return
+		}
+
+		if existingDoc.UserID != userID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+			return
+		}
+
+		// Get the content from the specified version
+		docPath := filepath.Join(gitRepoPath, fmt.Sprintf("%d.md", id))
+		content, err := git.GetDocumentContentAtVersion(gitRepoPath, docPath, versionHash)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve version content"})
+			return
+		}
+
+		// Get the current document title
+		var title string
+		err = db.QueryRow("SELECT title FROM docs WHERE id = ?", docID).Scan(&title)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get document title"})
+			return
+		}
+
+		// Update the document in database with version content
+		now := time.Now()
+		_, err = db.Exec("UPDATE docs SET content = ?, updated_at = ? WHERE id = ?",
+			content, now, docID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update document"})
+			return
+		}
+
+		// Save to git and create a new commit indicating restoration
+		if err := git.SaveDocument(docPath, content); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save document to git"})
+			return
+		}
+
+		commitMessage := fmt.Sprintf("Restored document '%s' to version %s", title, versionHash[:7])
+		newHash, err := git.CommitChangesWithHash(gitRepoPath, commitMessage)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit changes"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"id":         id,
+			"hash":       newHash,
+			"restored_from": versionHash,
+			"title":      title,
+			"content":    content,
+			"message":    commitMessage,
+			"updated_at": now,
+		})
+	}
+}
+
+func shareDocumentHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("userID")
+		docID := c.Param("id")
+		
+		id, err := strconv.Atoi(docID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid document ID"})
+			return
+		}
+
+		var req ShareDocumentRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		var existingDoc models.Document
+		err = db.QueryRow("SELECT user_id FROM docs WHERE id = ?", docID).
+			Scan(&existingDoc.UserID)
+		
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
+			return
+		}
+
+		userIDStr := fmt.Sprintf("%v", userID)
+		docUserIDStr := fmt.Sprintf("%v", existingDoc.UserID)
+
+		if userIDStr != docUserIDStr {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+			return
+		}
+
+		// Generate a unique share ID
+		shareID := generateShareID()
+		
+		// Set expiration time (30 days from now)
+		expireAt := time.Now().AddDate(0, 1, 0)
+		
+		// Save share information to database
+		_, err = db.Exec(
+			"INSERT INTO doc_shares (doc_id, share_id, can_edit, created_by, expire_at) VALUES (?, ?, ?, ?, ?)",
+			id, shareID, req.CanEdit, userID, expireAt)
+		
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create share link"})
+			return
+		}
+
+		// Generate shareable URL
+		shareURL := fmt.Sprintf("http://localhost:3000/shared/%s", shareID)
+
+		response := ShareDocumentResponse{
+			URL:      shareURL,
+			DocID:    id,
+			ShareID:  shareID,
+			CanEdit:  req.CanEdit,
+			ExpireAt: expireAt,
+		}
+
+		c.JSON(http.StatusOK, response)
+	}
+}

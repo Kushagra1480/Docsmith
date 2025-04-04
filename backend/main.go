@@ -11,12 +11,11 @@ import (
 )
 
 func main() {
-	homeDir, err := os.UserHomeDir()
+	cwd, err := os.Getwd()
 	if err != nil {
-		log.Fatalf("failed to get home directory %v", err)
+		log.Fatalf("Failed to get current working directory: %v", err)
 	}
-
-	gitRepoPath := filepath.Join(homeDir, "docsmith-repo")
+	gitRepoPath := filepath.Join(cwd, "docsmith-repo")
 	if _, err := os.Stat(gitRepoPath); os.IsNotExist(err) {
 		if err := os.MkdirAll(gitRepoPath, 0755); err != nil {
 			log.Fatalf("failed to create git repo folder, %v", err)
@@ -27,7 +26,10 @@ func main() {
 		log.Fatalf("failed to init git repo, %v", err)
 	}
 
-	dbPath := filepath.Join(homeDir, ".docsmith.db")
+	if err != nil {
+		log.Fatalf("Failed to get current working directory: %v", err)
+	}
+	dbPath := filepath.Join(cwd, "docsmith.db")
 	database, err := db.InitDB(dbPath)
 	if err != nil {
 		log.Fatalf("failed to init db, %v", err)
