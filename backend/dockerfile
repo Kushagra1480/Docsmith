@@ -1,0 +1,28 @@
+# Backend Dockerfile
+FROM golang:1.23.5-alpine
+
+RUN apk add --no-cache gcc musl-dev sqlite
+
+# Enable CGO for SQLite
+ENV CGO_ENABLED=1
+
+WORKDIR /app
+
+# Copy and download dependencies first (for better caching)
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy SQL schema
+COPY schema.sql /app/schema.sql
+
+# Create initial empty database from schema
+RUN mkdir -p /app/data && \
+    sqlite3 /app/data/docsmith.db < /app/schema.sql
+
+# Copy the rest of the backend code
+COPY . .
+
+EXPOSE 8080
+
+# Use go run instead of building and running a binary
+CMD ["go", "run", "."]

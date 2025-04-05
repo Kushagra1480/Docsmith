@@ -29,7 +29,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to get current working directory: %v", err)
 	}
-	dbPath := filepath.Join(cwd, "docsmith.db")
+	dbPath := "/app/data/docsmith.db"
 	database, err := db.InitDB(dbPath)
 	if err != nil {
 		log.Fatalf("failed to init db, %v", err)

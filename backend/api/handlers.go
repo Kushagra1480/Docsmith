@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"path/filepath"
@@ -593,67 +594,106 @@ func getDocumentVersionsHandler(gitRepoPath string) gin.HandlerFunc {
 
 func restoreDocumentVersionHandler(db *sql.DB, gitRepoPath string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID, _ := c.Get("userID")
+		// Log request information
 		docID := c.Param("id")
 		versionHash := c.Param("versionId")
+		log.Printf("REQUEST: Restoring document ID %s to version %s", docID, versionHash)
+		
+		// Get and log user ID from context
+		userID, exists := c.Get("userID")
+		log.Printf("AUTH: User ID from context: %v (exists: %v)", userID, exists)
+		if !exists {
+			log.Printf("ERROR: User ID not found in context, possible authentication issue")
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication required"})
+			return
+		}
 		
 		id, err := strconv.Atoi(docID)
 		if err != nil {
+			log.Printf("ERROR: Invalid document ID format: %s, error: %v", docID, err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid document ID"})
 			return
 		}
 
+		// Query document and log results
 		var existingDoc models.Document
+		log.Printf("DB: Querying document with ID: %s", docID)
 		err = db.QueryRow("SELECT user_id FROM docs WHERE id = ?", docID).
 			Scan(&existingDoc.UserID)
 		
 		if err != nil {
+			log.Printf("ERROR: Document not found: %s, error: %v", docID, err)
 			c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
 			return
 		}
+		log.Printf("DB: Document found, owner user_id: %v", existingDoc.UserID)
 
-		if existingDoc.UserID != userID {
+		// Log the permissions check
+		userIDStr := fmt.Sprintf("%v", userID)
+		docUserIDStr := fmt.Sprintf("%v", existingDoc.UserID)
+		log.Printf("PERMISSION CHECK: Current user: %s, Document owner: %s", userIDStr, docUserIDStr)
+
+		if userIDStr != docUserIDStr {
+			log.Printf("ACCESS DENIED: User %s attempted to restore document %s owned by user %s", 
+				userIDStr, docID, docUserIDStr)
 			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 			return
 		}
+		log.Printf("ACCESS GRANTED: User %s has permission to restore document %s", userIDStr, docID)
 
 		// Get the content from the specified version
 		docPath := filepath.Join(gitRepoPath, fmt.Sprintf("%d.md", id))
+		log.Printf("GIT: Retrieving content at path %s for version %s", docPath, versionHash)
 		content, err := git.GetDocumentContentAtVersion(gitRepoPath, docPath, versionHash)
 		if err != nil {
+			log.Printf("ERROR: Failed to get version content: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve version content"})
 			return
 		}
+		log.Printf("GIT: Successfully retrieved content (%d bytes)", len(content))
 
 		// Get the current document title
 		var title string
+		log.Printf("DB: Querying document title for ID: %s", docID)
 		err = db.QueryRow("SELECT title FROM docs WHERE id = ?", docID).Scan(&title)
 		if err != nil {
+			log.Printf("ERROR: Failed to get document title: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get document title"})
 			return
 		}
+		log.Printf("DB: Document title: %s", title)
 
 		// Update the document in database with version content
 		now := time.Now()
-		_, err = db.Exec("UPDATE docs SET content = ?, updated_at = ? WHERE id = ?",
+		log.Printf("DB: Updating document %s with restored content", docID)
+		result, err := db.Exec("UPDATE docs SET content = ?, updated_at = ? WHERE id = ?",
 			content, now, docID)
 		if err != nil {
+			log.Printf("ERROR: Failed to update document: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update document"})
 			return
 		}
+		rowsAffected, _ := result.RowsAffected()
+		log.Printf("DB: Update successful, rows affected: %d", rowsAffected)
 
 		// Save to git and create a new commit indicating restoration
+		log.Printf("GIT: Saving document to path: %s", docPath)
 		if err := git.SaveDocument(docPath, content); err != nil {
+			log.Printf("ERROR: Failed to save document to git: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save document to git"})
 			return
 		}
+		log.Printf("GIT: Document saved successfully")
 
 		commitMessage := fmt.Sprintf("Restored document '%s' to version %s", title, versionHash[:7])
+		log.Printf("GIT: Creating commit with message: %s", commitMessage)
 		newHash, err := git.CommitChangesWithHash(gitRepoPath, commitMessage)
 		if err != nil {
+			log.Printf("ERROR: Failed to commit changes: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit changes"})
 			return
 		}
+		log.Printf("GIT: Changes committed successfully with hash: %s", newHash)
 
 		c.JSON(http.StatusOK, gin.H{
 			"id":         id,
@@ -664,6 +704,7 @@ func restoreDocumentVersionHandler(db *sql.DB, gitRepoPath string) gin.HandlerFu
 			"message":    commitMessage,
 			"updated_at": now,
 		})
+		log.Printf("SUCCESS: Document %s restored to version %s", docID, versionHash)
 	}
 }
 

@@ -7,7 +7,7 @@ export function getStoredAuth() {
   } catch (error) {
     // If parsing fails, the stored value might be the token itself
     console.error('Error parsing auth data:', error);
-    localStorage.removeItem('auth'); // Clear the invalid data
+    localStorage.removeItem('auth'); 
     return null;
   }
 }

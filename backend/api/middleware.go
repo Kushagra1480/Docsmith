@@ -37,7 +37,7 @@ func authMiddleware(db *sql.DB) gin.HandlerFunc {
 		if authHeader == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
 			c.Abort()
-			return 
+			return
 		}
 
 		bearerToken := strings.Split(authHeader, " ")
@@ -65,4 +65,3 @@ func authMiddleware(db *sql.DB) gin.HandlerFunc {
 	}
 
 }
-

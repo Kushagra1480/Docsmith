@@ -12,6 +12,7 @@ import { useDocuments } from '../context/DocumentContext';
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
+import Notification from '../Notificaton';
 
 const LivePreview = Extension.create({
   name: 'livePreview',
@@ -141,9 +142,11 @@ function DocumentEditor() {
   const [showShareDialog, setShowShareDialog] = useState(false);
   const [versionComment, setVersionComment] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const [viewMode, setViewMode] = useState(true);
+  const [viewMode, setViewMode] = useState(false);
+  const [shareInfo, setShareInfo] = useState(null);
   const editorRef = useRef(null);
   const editorInstanceRef = useRef(null);
+  const [notification, setNotification] = useState({ message: '', type: 'success' }); 
 
   useEffect(() => {
     if (id) {
@@ -209,7 +212,7 @@ function DocumentEditor() {
       }
       disableCollaboration();
     };
-  }, [viewMode]);
+  }, [!viewMode]);
 
   function handleTitleChange(e) {
     setTitle(e.target.value);
@@ -263,10 +266,6 @@ function DocumentEditor() {
     setShowVersionHistory(!showVersionHistory);
   }
 
-  function toggleShareDialog() {
-    setShowShareDialog(!showShareDialog);
-  }
-
   function toggleViewMode() {
     setViewMode(!viewMode);
   }
@@ -276,11 +275,37 @@ function DocumentEditor() {
       console.error("Cannot share: document is undefined or missing ID");
       return;
     }
-    console.log("Attempting to share document with ID:", currentDocument.id);
-    await generateShareLink(currentDocument.id, canEdit);
-    toggleShareDialog();
+    
+    try {
+      const shareResponse = await generateShareLink(currentDocument.id, canEdit);
+      const shareId = shareResponse.split('/').pop();
+      const fullUrl = `${window.location.origin}${shareResponse}`;
+      
+      setShareInfo({
+        url: fullUrl,
+        shareId: shareId
+      });
+    } catch (error) {
+      console.error("Error generating share link:", error);
+      setNotification({ message: "Failed to generate share link", type: "error" });
+    }
   }
 
+  const handleShareIdClick = async () => {
+    if (shareInfo?.url) {
+      try {
+        await navigator.clipboard.writeText(shareInfo.url);
+        setNotification({ message: "URL copied to clipboard!", type: "success" });
+      } catch (error) {
+        console.error("Failed to copy URL:", error);
+        setNotification({ message: "Failed to copy URL", type: "error" });
+      }
+    }
+  };
+
+  const clearNotification = () => {
+    setNotification({ message: '', type: 'success' });
+  };
   function toggleCollaboration() {
     if (!currentDocument) return;
     if (isCollaborating) {
@@ -361,11 +386,20 @@ function DocumentEditor() {
                     {showVersionHistory ? 'Hide History' : 'History'}
                   </button>
                   <button 
-                    onClick={toggleShareDialog} 
+                    onClick={handleGenerateShareLink} 
                     className="px-4 py-2 mx-1 text-sm font-medium bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
                   >
                     Share
                   </button>
+                  {shareInfo?.shareId && (
+                    <span 
+                      onClick={handleShareIdClick}
+                      className="px-4 py-2 mx-1 text-sm font-medium text-blue-600 cursor-pointer hover:text-blue-800"
+                      title="Click to copy full URL"
+                    >
+                      {shareInfo.shareId}
+                    </span>
+                  )}
                   <button 
                     onClick={toggleCollaboration} 
                     className={`px-4 py-2 mx-1 text-sm font-medium border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors ${isCollaborating ? 'bg-green-500 text-white hover:bg-green-600 border-transparent' : 'bg-white border-gray-300 hover:bg-gray-50'}`}
@@ -402,20 +436,18 @@ function DocumentEditor() {
             </div>
           )}
         </div>
+        <Notification 
+          message={notification.message}
+          type={notification.type}
+          onClose={clearNotification}
+          duration={3000} // 3 seconds
+        />
 
         {showVersionHistory && currentDocument && (
           <VersionHistory 
             versions={documentVersions} 
             documentId={currentDocument.id}
             onClose={() => setShowVersionHistory(false)}
-          />
-        )}
-
-        {showShareDialog && currentDocument && (
-          <ShareDocument 
-            shareLink={shareLink}
-            onGenerateLink={handleGenerateShareLink}
-            onClose={() => setShowShareDialog(false)}
           />
         )}
 
